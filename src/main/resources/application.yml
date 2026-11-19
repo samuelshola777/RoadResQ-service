@@ -13,10 +13,30 @@ spring:
   application:
     name: road-resq-service
 
+  task:
+    scheduling:
+      pool:
+        size: 5
+
+  rabbitmq:
+    addresses: ${RABBITMQ_ADDRESS:amqps://piscxtce:GrsAS9LUVXBdSWssipvzSw0AYtIzcuAr@gerbil.rmq.cloudamqp.com/piscxtce}
+    connection-timeout: 3s
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: true
+    listener:
+      simple:
+        default-requeue-rejected: false
+
   mongodb:
     uri: ${MONGODB_URI}
 
   data:
+    redis:
+      url: ${REDIS_URL}
+      connect-timeout: 5s
+      timeout: 5s
     mongodb:
       auto-index-creation: true
 
@@ -42,7 +62,12 @@ spring:
       mail.smtp.writetimeout: 5000
 
 app:
-  auth-service-url: ${AUTH_SERVICE_URL:http://localhost:8071}
+  live-websocket-origins: "${LIVE_WEBSOCKET_ORIGINS:*}"
+  account-access-cache:
+    enabled: ${ROADRESQ_ACCESS_CACHE_ENABLED:true}
+
+  auth-mongodb-uri: ${MONGODB_URI}
+  auth-mongodb-zone: ${AUTH_MONGODB_ZONE:UTC}
   jwt-secret: ${JWT_SECRET}
   secret-key: ${SECRET_KEY}
   encryption-secret-key: ${ENCRYPTION_SECRET_KEY}
@@ -52,10 +77,8 @@ app:
   cloudinary-key: ${CLOUDINARY_API_KEY}
   cloudinary-secret: ${CLOUDINARY_API_SECRET}
 
-
   issuer: ${JWT_ISSUER:road-resq-auth}
   audience: ${JWT_AUDIENCE:road-resq}
-
   google-client-ids: ${GOOGLE_CLIENT_IDS:}
 
   public-base-url: ${PUBLIC_BASE_URL:http://localhost:8080}

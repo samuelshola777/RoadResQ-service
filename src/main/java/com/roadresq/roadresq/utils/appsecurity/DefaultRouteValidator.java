@@ -54,8 +54,14 @@ public class DefaultRouteValidator {
     public Predicate<HttpServletRequest> isCustomerSecured = req -> {
         String uri = req.getRequestURI();
 
-        boolean isCustomerPath = (uri.equals("/api/v1/customer/private") || uri.startsWith("/api/v1/customer/private/"));
-        boolean isNotAdminPath = !uri.equals("/api/v1/customer/private/admin") && !uri.startsWith("/api/v1/customer/private/admin/");
+        boolean isCustomerPath = uri.equals("/api/v1/customer/private")
+                || uri.startsWith("/api/v1/customer/private/")
+                || uri.equals("/api/v1/vendor-location/private/nearby-vendors")
+                || uri.equals("/api/v1/rescue-requests/private")
+                || uri.startsWith("/api/v1/rescue-requests/private/");
+
+        boolean isNotAdminPath = !uri.equals("/api/v1/customer/private/admin")
+                && !uri.startsWith("/api/v1/customer/private/admin/");
 
         boolean isSecured = isCustomerPath && isNotAdminPath;
         if (isSecured) {
@@ -69,6 +75,8 @@ public class DefaultRouteValidator {
 
         boolean isVendorPath = uri.equals("/api/v1/vendor/private")
                 || uri.startsWith("/api/v1/vendor/private/")
+                || uri.equals("/api/v1/vendor-location/private")
+                || uri.startsWith("/api/v1/rescue-dispatch/private/")
                 || uri.equals("/api/v1/vendor-operation/private")
                 || uri.startsWith("/api/v1/vendor-operation/private/")
                 || uri.equals("/api/v1/vendor-operation-equipment/private")

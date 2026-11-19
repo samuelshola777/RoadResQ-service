@@ -1,9 +1,7 @@
 package com.roadresq.roadresq.utils.appsecurity;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.jsonwebtoken.Claims;
-import jakarta.annotation.PostConstruct;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -11,21 +9,15 @@ import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
-import org.springframework.web.client.RestClient;
-import org.springframework.web.client.RestClientException;
-import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
 
@@ -37,26 +29,11 @@ public class ApiSecurityFilter extends OncePerRequestFilter {
     private final JwtService jwtService;
     private final ObjectMapper objectMapper;
     private final RouteValidator routeValidator;
+    private final AccountAccessReader accountAccessReader;
+    private final AccountAccessCache accountAccessCache;
 
     @Value("${app.api-key}")
     private String apiKey;
-
-    @Value("${app.auth-service-url:http://localhost:8071}")
-    private String authServiceUrl;
-
-    private RestClient authClient;
-
-    @PostConstruct
-    public void initializeAuthClient() {
-        log.info("Initializing Auth RestClient with base URL: {}", authServiceUrl);
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(Duration.ofSeconds(2));
-        factory.setReadTimeout(Duration.ofSeconds(3));
-        authClient = RestClient.builder()
-                .baseUrl(authServiceUrl)
-                .requestFactory(factory)
-                .build();
-    }
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
@@ -90,7 +67,8 @@ public class ApiSecurityFilter extends OncePerRequestFilter {
                 reject(response, 401, "A Bearer access token is required");
                 return;
             }
-            claims = jwtService.parse(authorization.substring(7).trim());
+            String token = authorization.substring(7).trim();
+            claims = jwtService.parse(token);
 
             // 3. Validate Platform Access
             String platform = singleHeader(request, "X-Service-Type");
@@ -136,7 +114,7 @@ public class ApiSecurityFilter extends OncePerRequestFilter {
             }
 
             // 6. Check Live Database Access
-            if (!checkCurrentAccess(request, response, claims, role, profileClaim)) {
+            if (!checkCurrentAccess(response, claims, token, role)) {
                 return;
             }
 
@@ -170,57 +148,34 @@ public class ApiSecurityFilter extends OncePerRequestFilter {
         }
     }
 
-    private boolean checkCurrentAccess(HttpServletRequest request, HttpServletResponse response,
-                                       Claims claims, String role, String profileClaim) throws IOException {
-        String account = switch (role) {
-            case "VENDOR" -> "vendor";
-            case "CUSTOMER" -> "customer";
-            case "ADMIN" -> "admin";
-            default -> "";
-        };
+    private boolean checkCurrentAccess(HttpServletResponse response, Claims claims,
+                                       String token, String role) throws IOException {
+        String generation = "ADMIN".equals(role) ? "" : accountAccessCache.lookup(claims, token);
+        if ("hit".equals(generation)) return true;
 
+        final AccountAccessReader.Result result;
         try {
-            String body = authClient.get().uri("/api/v1/" + account + "/private/platform-access")
-                    .header(HttpHeaders.AUTHORIZATION, request.getHeader(HttpHeaders.AUTHORIZATION))
-                    .header("X-Api-Key", apiKey)
-                    .header("X-Service-Type", "ROAD_RESQ")
-                    .retrieve().body(String.class);
-
-            JsonNode result = objectMapper.readTree(body == null ? "{}" : body);
-            JsonNode profile = result.path("data");
-
-            if (!result.path("success").asBoolean() || profile.isMissingNode() || profile.isNull()) {
-                log.info("Access check failed: Auth service returned an invalid response for URI: {}", request.getRequestURI());
-                reject(response, 503, "Account verification is temporarily unavailable");
-                return false;
-            }
-
-            boolean active = profile.path("active").asBoolean();
-            boolean verified = "ADMIN".equals(role)
-                    ? profile.path("userActive").asBoolean() && profile.path("userVerified").asBoolean()
-                    : profile.path("verified").asBoolean();
-
-            if (!active || !verified
-                    || !claims.get("userId", String.class).equals(profile.path("userId").asText())
-                    || !claims.get(profileClaim, String.class).equals(profile.path(profileClaim).asText())) {
-                log.info("Access denied: Live database identity mismatch or inactive account for user ID: {}", claims.get("userId", String.class));
-                reject(response, 403, "Account access is inactive or unavailable");
-                return false;
-            }
-            return true;
-
-        } catch (RestClientResponseException exception) {
-            int status = exception.getStatusCode().value();
-            log.info("Access check failed: Auth service responded with status {} for URI: {}", status, request.getRequestURI());
-            reject(response, status == 401 ? 401 : (status == 403 || status == 404 ? 403 : 503),
-                    status == 401 ? "Please sign in again" : (status == 403 || status == 404
-                            ? "Platform access is inactive or unavailable" : "Account verification is temporarily unavailable"));
-            return false;
-        } catch (RestClientException | IOException exception) {
-            log.info("Access check failed: Auth service unreachable for URI: {}. Reason: {}", request.getRequestURI(), exception.getMessage());
+            result = accountAccessReader.check(claims);
+        } catch (RuntimeException exception) {
+            log.warn("Live RoadResQ account verification unavailable", exception);
             reject(response, 503, "Account verification is temporarily unavailable");
             return false;
         }
+
+        return switch (result) {
+            case ALLOWED -> {
+                accountAccessCache.fill(claims, token, generation);
+                yield true;
+            }
+            case UNAUTHENTICATED -> {
+                reject(response, 401, "Please sign in again");
+                yield false;
+            }
+            case FORBIDDEN -> {
+                reject(response, 403, "Platform access is inactive or unavailable");
+                yield false;
+            }
+        };
     }
 
     private boolean validPlatform(String value) {

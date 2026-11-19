@@ -17,6 +17,7 @@ import io.jsonwebtoken.JwtException;
 import jakarta.annotation.PostConstruct;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -34,7 +35,10 @@ import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class VendorOperationService {
+    private final com.roadresq.roadresq.utils.PaginationService paginationService;
+
 
     private final VendorOperationRepository vendorOperationRepository;
     private final VendorOperationEquipmentRepository equipmentRepository;
@@ -205,4 +209,30 @@ public class VendorOperationService {
 
     private record VendorIdentity(String vendorId, String userId) {
     }
+
+    public java.util.List<java.util.Map<String, Object>> getAdminBreakdown() {
+        java.util.List<java.util.Map<String, Object>> result = new java.util.ArrayList<>();
+        for (ServiceType type : ServiceType.values()) {
+            long count = mongoTemplate.count(new org.springframework.data.mongodb.core.query.Query(
+                            org.springframework.data.mongodb.core.query.Criteria.where("vendorOperationServiceType").is(type)),
+                    vendorOperations.class);
+            result.add(java.util.Map.of("serviceType", type.name(), "count", count));
+        }
+        log.info("Admin operation breakdown retrieved");
+        return result;
+    }
+
+    public java.util.Map<String, Long> getAdminSummary() {
+        return java.util.Map.of(
+                "operations", mongoTemplate.count(new org.springframework.data.mongodb.core.query.Query(), vendorOperations.class),
+                "equipment", mongoTemplate.count(new org.springframework.data.mongodb.core.query.Query(), com.roadresq.roadresq.vendorOperationEquipment.VendorOperationEquipment.class));
+    }
+
+    public com.roadresq.roadresq.utils.PaginatedData getAdminEquipment(String vendorId, int page, int size) {
+        return paginationService.paginate(new org.springframework.data.mongodb.core.query.Query(
+                        org.springframework.data.mongodb.core.query.Criteria.where("vendorId").is(vendorId)),
+                com.roadresq.roadresq.vendorOperationEquipment.VendorOperationEquipment.class,
+                page, size, "createdAt", "DESC", java.util.Set.of("createdAt"));
+    }
+
 }

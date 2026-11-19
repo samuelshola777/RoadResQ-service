@@ -19,6 +19,7 @@ import java.util.List;
 @RequiredArgsConstructor
 public class VendorOperationController {
     private final VendorOperationService vendorServiceOperationService;
+    private final com.roadresq.roadresq.adminActivity.AdminActivityService adminActivityService;
 
     @GetMapping("/private/service-types")
     @PreAuthorize("hasRole('VENDOR')")
@@ -72,9 +73,31 @@ public class VendorOperationController {
     }
 
     @GetMapping("/private/admin/{vendorId}/services")
-    @PreAuthorize("hasAnyRole('ADMIN', 'SUPER_ADMIN')")
     public ResponseEntity<ApiResponse<List<VendorOperationServiceResponse>>> getVendorServices(@PathVariable String vendorId) {
         return ResponseEntity.ok(new ApiResponse<>(true, "Vendor services retrieved successfully", vendorServiceOperationService.getVendorServices(vendorId)));
+    }
+
+
+    @GetMapping("/private/admin/breakdown")
+    public ApiResponse<java.util.List<java.util.Map<String, Object>>> breakdown() {
+        return new ApiResponse<>(true, "Operation breakdown retrieved", vendorServiceOperationService.getAdminBreakdown());
+    }
+
+    @GetMapping("/private/admin/summary")
+    public ApiResponse<java.util.Map<String, Long>> summary() {
+        return new ApiResponse<>(true, "Operations summary retrieved", vendorServiceOperationService.getAdminSummary());
+    }
+
+    @GetMapping("/private/admin/{vendorId}/equipment")
+    public ApiResponse<com.roadresq.roadresq.utils.PaginatedData> equipment(@PathVariable String vendorId,
+                                                                            @RequestParam(defaultValue = "1") int page, @RequestParam(defaultValue = "20") int size) {
+        return new ApiResponse<>(true, "Vendor equipment retrieved", vendorServiceOperationService.getAdminEquipment(vendorId, page, size));
+    }
+
+    @GetMapping("/private/admin/activity")
+    public ApiResponse<com.roadresq.roadresq.utils.PaginatedData> activity(@RequestParam(defaultValue = "1") int page,
+                                                                           @RequestParam(defaultValue = "20") int size) {
+        return new ApiResponse<>(true, "Road service admin activity retrieved", adminActivityService.getActivity(page, size));
     }
 
 }

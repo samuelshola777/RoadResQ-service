@@ -1,38 +1,39 @@
-
 package com.roadresq.roadresq.vendorOperationEquipment.EquipemtCapacity;
 
-import com.roadresq.roadresq.utils.BaseEntity;
+import com.fasterxml.jackson.annotation.JsonFormat;
 import com.roadresq.roadresq.vendorOperation.ServiceType;
-import com.roadresq.roadresq.vendorOperationEquipment.EquipemtCapacity.CapacityType;
-import com.roadresq.roadresq.vendorOperationEquipment.EquipemtCapacity.CapacityUnit;
 import lombok.Data;
-import lombok.EqualsAndHashCode;
+import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.HashSet;
 import java.util.Set;
 
 @Data
-@EqualsAndHashCode(callSuper = true)
 @Document("equipment_capacities")
-public class EquipmentCapacity extends BaseEntity {
+public class EquipmentCapacity {
+
+    @Id
+    private String id;
+
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd HH:mm:ss")
+    private LocalDateTime createdAt = LocalDateTime.now().truncatedTo(ChronoUnit.SECONDS);
+
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd HH:mm:ss")
+    private LocalDateTime updatedAt = createdAt;
 
     private ServiceType serviceType;
-
     private String equipmentType;
-
     private CapacityType capacityType;
-
     private BigDecimal capacityValue;
-
     private CapacityUnit capacityUnit;
-
     private Integer voltage;
-
     private String displayName;
-
+    private Set<CapacityGroup> capacityGroups = new HashSet<>();
+    private Set<VehicleType> vehicleTypes = new HashSet<>();
     private Set<String> pictures = new HashSet<>();
-
     private boolean active = true;
 }

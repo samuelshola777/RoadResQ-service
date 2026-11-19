@@ -20,6 +20,7 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -56,7 +57,9 @@ public class EquipmentCapacitySeeder implements ApplicationRunner {
 
         for (CapacityOption option : options) {
             // Match either the original seeded ID or an equivalent admin-created option.
-            // Existing rows are never modified: names, active flags and pictures are retained.
+            Set<CapacityGroup> groups = groupsFor(
+                    option.serviceType(), option.equipmentType(), option.capacityValue(), option.voltage()
+            );
             Criteria sameSpecification = Criteria.where("serviceType").is(option.serviceType())
                     .and("equipmentType").is(option.equipmentType())
                     .and("capacityType").is(option.capacityType())
@@ -78,6 +81,8 @@ public class EquipmentCapacitySeeder implements ApplicationRunner {
                     .setOnInsert("capacityUnit", option.capacityUnit())
                     .setOnInsert("voltage", option.voltage())
                     .setOnInsert("displayName", option.displayName())
+                    .setOnInsert("capacityGroups", groups)
+                    .setOnInsert("vehicleTypes", CapacityGroup.vehicleTypesFor(groups))
                     .setOnInsert("pictures", Set.of())
                     .setOnInsert("active", option.active())
                     .setOnInsert("createdAt", now)
@@ -90,6 +95,79 @@ public class EquipmentCapacitySeeder implements ApplicationRunner {
         int inserted = result.getUpserts().size();
         log.info("Equipment capacity catalogue: {} new options, {} already present ({} total definitions)",
                 inserted, options.size() - inserted, options.size());
+        backfillVehicleTypes();
+    }
+
+    private void backfillVehicleTypes() {
+        Query legacyQuery = Query.query(Criteria.where("serviceType")
+                .in(ServiceType.TOWING, ServiceType.BATTERY_JUMP_START)
+                .and("vehicleTypes").is(null));
+        List<EquipmentCapacity> legacyRows = mongoTemplate.find(legacyQuery, EquipmentCapacity.class);
+        if (legacyRows.isEmpty()) {
+            return;
+        }
+
+        BulkOperations bulk = mongoTemplate.bulkOps(BulkOperations.BulkMode.UNORDERED, EquipmentCapacity.class);
+        for (EquipmentCapacity capacity : legacyRows) {
+            Set<CapacityGroup> groups = capacity.getCapacityGroups();
+            if (groups == null || groups.isEmpty()) {
+                groups = groupsFor(capacity.getServiceType(), capacity.getEquipmentType(),
+                        capacity.getCapacityValue(), capacity.getVoltage());
+            }
+
+            // Admin writes populate vehicleTypes, so this filter protects concurrent admin edits.
+            Query query = Query.query(Criteria.where("_id").is(capacity.getId())
+                    .and("vehicleTypes").is(null));
+            bulk.updateOne(query, new Update()
+                    .set("capacityGroups", groups)
+                    .set("vehicleTypes", CapacityGroup.vehicleTypesFor(groups)));
+        }
+        log.info("Equipment capacity catalogue: {} legacy rows backfilled", bulk.execute().getModifiedCount());
+    }
+
+    private static Set<CapacityGroup> groupsFor(ServiceType serviceType, String equipmentType, BigDecimal value, Integer voltage) {
+        if (equipmentType == null || value == null || value.signum() <= 0) {
+            return Set.of();
+        }
+        long rating = value.longValue();
+        return switch (serviceType) {
+            case TOWING -> towingGroups(equipmentType, rating);
+            case BATTERY_JUMP_START -> batteryGroups(voltage, rating);
+            case FUEL_DELIVERY -> Set.of();
+        };
+    }
+
+    private static Set<CapacityGroup> towingGroups(String equipmentType, long kg) {
+        // Groups shortlist equipment. The vendor still checks vehicle weight and recovery method.
+        Set<CapacityGroup> groups = EnumSet.noneOf(CapacityGroup.class);
+        switch (equipmentType) {
+            case "MOTORCYCLE_TOW_TRAILER" -> groups.add(CapacityGroup.E);
+            case "FLATBED_TOW_TRUCK", "VEHICLE_TRANSPORT_TRAILER",
+                 "WHEEL_LIFT_TOW_TRUCK", "INTEGRATED_TOW_TRUCK" -> {
+                if (kg >= 2_000) groups.add(CapacityGroup.A);
+                if (kg >= 3_500) groups.add(CapacityGroup.B);
+                if (kg >= 5_000) groups.add(CapacityGroup.C);
+                if (kg >= 10_000) groups.add(CapacityGroup.D);
+            }
+            case "HEAVY_DUTY_WRECKER", "HEAVY_DUTY_LOW_LOADER" -> {
+                if (kg >= 10_000) groups.add(CapacityGroup.D);
+            }
+            default -> { }
+        }
+        return groups;
+    }
+
+    private static Set<CapacityGroup> batteryGroups(Integer voltage, long amps) {
+        Set<CapacityGroup> groups = EnumSet.noneOf(CapacityGroup.class);
+        if (Integer.valueOf(12).equals(voltage)) {
+            if (amps >= 1_000) groups.add(CapacityGroup.A);
+            if (amps >= 2_000) groups.add(CapacityGroup.B);
+            if (amps >= 3_000) groups.add(CapacityGroup.C);
+        }
+        if (Integer.valueOf(24).equals(voltage) && amps >= 3_000) {
+            groups.add(CapacityGroup.D);
+        }
+        return groups;
     }
 
     private static List<CapacityOption> buildDefaultOptions() {
@@ -188,16 +266,4 @@ public class EquipmentCapacitySeeder implements ApplicationRunner {
             case PEAK_STARTING_CURRENT -> "peak starting current";
         };
     }
-
-    private record CapacityOption(
-            String id,
-            ServiceType serviceType,
-            String equipmentType,
-            CapacityType capacityType,
-            BigDecimal capacityValue,
-            CapacityUnit capacityUnit,
-            Integer voltage,
-            String displayName,
-            boolean active
-    ) {}
 }

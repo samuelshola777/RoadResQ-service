@@ -11,6 +11,10 @@ import java.util.Optional;
 public interface VendorOperationEquipmentRepository
         extends MongoRepository<VendorOperationEquipment, String> {
 
+    List<VendorOperationEquipment> findAllByVendorOperationIdInAndCapacityIdIn(
+            List<String> operationIds, List<String> capacityIds
+    );
+
     List<VendorOperationEquipment> findAllByVendorIdOrderByCreatedAtAsc(
             String vendorId
     );

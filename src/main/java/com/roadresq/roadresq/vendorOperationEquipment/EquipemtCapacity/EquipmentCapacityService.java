@@ -10,6 +10,7 @@ import com.roadresq.roadresq.vendorOperationEquipment.EquipemtCapacity.CapacityT
 import com.roadresq.roadresq.vendorOperationEquipment.EquipemtCapacity.CapacityUnit;
 import com.roadresq.roadresq.vendorOperationEquipment.EquipemtCapacity.request.EquipmentCapacityCreateRequest;
 import com.roadresq.roadresq.vendorOperationEquipment.EquipemtCapacity.request.EquipmentCapacityUpdateRequest;
+import com.roadresq.roadresq.vendorOperationEquipment.EquipemtCapacity.response.EquipmentCapacityResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -27,6 +28,7 @@ import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
+@lombok.extern.slf4j.Slf4j
 public class EquipmentCapacityService {
 
     private static final Set<String> ALLOWED_SORT_FIELDS = Set.of(
@@ -35,10 +37,12 @@ public class EquipmentCapacityService {
     );
 
     private final EquipmentCapacityRepository equipmentCapacityRepository;
+    private final com.roadresq.roadresq.adminActivity.AdminActivityService adminActivityService;
     private final PaginationService paginationService;
 
     // Admin only: register another selectable catalogue option.
-    public EquipmentCapacity createCapacity(EquipmentCapacityCreateRequest request) {
+    @org.springframework.transaction.annotation.Transactional
+    public EquipmentCapacityResponse createCapacity(EquipmentCapacityCreateRequest request) {
         EquipmentCapacity capacity = new EquipmentCapacity();
         capacity.setServiceType(request.serviceType());
         capacity.setEquipmentType(normalizeEquipmentType(request.equipmentType()));
@@ -51,13 +55,19 @@ public class EquipmentCapacityService {
         capacity.setActive(request.active() == null || request.active());
 
         validateSpecification(capacity);
+        applyCapacityGroups(capacity, request.capacityGroups());
         assertNoDuplicate(capacity);
-        return save(capacity);
+        EquipmentCapacity saved = save(capacity);
+        adminActivityService.record("CAPACITY_SAVED", saved.getId(), null, null, saved.getDisplayName());
+        log.info("Admin saved equipment capacity: id={}", saved.getId());
+        return EquipmentCapacityResponse.from(saved);
     }
 
     // Admin only: partial update, preserving omitted fields.
-    public EquipmentCapacity updateCapacity(String capacityId, EquipmentCapacityUpdateRequest request) {
+    @org.springframework.transaction.annotation.Transactional
+    public EquipmentCapacityResponse updateCapacity(String capacityId, EquipmentCapacityUpdateRequest request) {
         EquipmentCapacity capacity = findCapacity(capacityId);
+        ServiceType previousServiceType = capacity.getServiceType();
 
         if (request.serviceType() != null) {
             capacity.setServiceType(request.serviceType());
@@ -93,23 +103,33 @@ public class EquipmentCapacityService {
         }
 
         validateSpecification(capacity);
+        Set<CapacityGroup> groups = request.capacityGroups();
+        if (groups == null && previousServiceType == capacity.getServiceType()
+                && capacity.getServiceType() != ServiceType.FUEL_DELIVERY) {
+            groups = capacity.getCapacityGroups();
+        }
+        applyCapacityGroups(capacity, groups);
         assertNoDuplicate(capacity);
         capacity.setUpdatedAt(LocalDateTime.now());
-        return save(capacity);
+        EquipmentCapacity saved = save(capacity);
+        adminActivityService.record("CAPACITY_SAVED", saved.getId(), null, null, saved.getDisplayName());
+        log.info("Admin saved equipment capacity: id={}", saved.getId());
+        return EquipmentCapacityResponse.from(saved);
     }
 
     // Vendors can access active options only. Admins can include inactive options.
-    public EquipmentCapacity getCapacity(String capacityId, boolean includeInactive) {
+    public EquipmentCapacityResponse getCapacity(String capacityId, boolean includeInactive) {
         EquipmentCapacity capacity = findCapacity(capacityId);
         if (!includeInactive && !capacity.isActive()) {
             throw new ResourceNotFoundException("Equipment capacity not found");
         }
-        return capacity;
+        return EquipmentCapacityResponse.from(capacity);
     }
 
     public PaginatedData getCapacities(
             ServiceType serviceType,
             String equipmentType,
+            VehicleType vehicleType,
             Boolean active,
             int page,
             int size,
@@ -124,23 +144,34 @@ public class EquipmentCapacityService {
         if (equipmentType != null && !equipmentType.isBlank()) {
             query.addCriteria(Criteria.where("equipmentType").is(normalizeEquipmentType(equipmentType)));
         }
+        if (vehicleType != null) {
+            query.addCriteria(Criteria.where("vehicleTypes").is(vehicleType));
+        }
         if (active != null) {
             query.addCriteria(Criteria.where("active").is(active));
         }
 
-        return paginationService.paginate(
+        PaginatedData result = paginationService.paginate(
                 query, EquipmentCapacity.class, page, size,
                 sortBy, sortDirection, ALLOWED_SORT_FIELDS
         );
+        List<EquipmentCapacityResponse> capacities = ((List<?>) result.data()).stream()
+                .map(EquipmentCapacity.class::cast)
+                .map(EquipmentCapacityResponse::from)
+                .toList();
+        return new PaginatedData(result.totalPage(), result.numberOfElements(), result.totalElements(), capacities);
     }
 
     // DELETE deactivates instead of removing the row. The startup seeder will not recreate it.
+    @org.springframework.transaction.annotation.Transactional
     public void deleteCapacity(String capacityId) {
         EquipmentCapacity capacity = findCapacity(capacityId);
         if (capacity.isActive()) {
             capacity.setActive(false);
             capacity.setUpdatedAt(LocalDateTime.now());
             equipmentCapacityRepository.save(capacity);
+            adminActivityService.record("CAPACITY_DEACTIVATED", capacity.getId(), null, "ACTIVE", "INACTIVE");
+            log.info("Admin deactivated equipment capacity: id={}", capacity.getId());
         }
     }
 
@@ -173,6 +204,15 @@ public class EquipmentCapacityService {
         if (duplicate) {
             throw new ResourceExistsException("This equipment capacity already exists");
         }
+    }
+
+    private static void applyCapacityGroups(EquipmentCapacity capacity, Set<CapacityGroup> groups) {
+        Set<CapacityGroup> selectedGroups = groups == null ? Set.of() : Set.copyOf(groups);
+        if (capacity.getServiceType() == ServiceType.FUEL_DELIVERY && !selectedGroups.isEmpty()) {
+            throw new InvalidInputException("Fuel delivery uses litre capacity without vehicle groups");
+        }
+        capacity.setCapacityGroups(selectedGroups);
+        capacity.setVehicleTypes(CapacityGroup.vehicleTypesFor(selectedGroups));
     }
 
     private static void validateSpecification(EquipmentCapacity capacity) {
