@@ -104,8 +104,8 @@ public class EquipmentCapacityService {
 
         validateSpecification(capacity);
         Set<CapacityGroup> groups = request.capacityGroups();
-        if (groups == null && previousServiceType == capacity.getServiceType()
-                && capacity.getServiceType() != ServiceType.FUEL_DELIVERY) {
+        if (groups == null && capacity.getServiceType() == ServiceType.BATTERY_JUMP_START
+                && previousServiceType == capacity.getServiceType()) {
             groups = capacity.getCapacityGroups();
         }
         applyCapacityGroups(capacity, groups);
@@ -208,11 +208,27 @@ public class EquipmentCapacityService {
 
     private static void applyCapacityGroups(EquipmentCapacity capacity, Set<CapacityGroup> groups) {
         Set<CapacityGroup> selectedGroups = groups == null ? Set.of() : Set.copyOf(groups);
+        if (capacity.getServiceType() == ServiceType.TOWING) {
+            if (capacity.getEquipmentType().contains("MOTORCYCLE")) {
+                throw new InvalidInputException("This towing equipment type is retired");
+            }
+            Set<CapacityGroup> expected = TowingCatalogue.groupsFor(capacity.getCapacityValue());
+            if (groups != null && !expected.equals(selectedGroups)) {
+                throw new InvalidInputException("The towing group must match the rated capacity band");
+            }
+            if (capacity.isActive() && expected.isEmpty()) {
+                throw new InvalidInputException("This towing rating needs review before activation");
+            }
+            selectedGroups = expected;
+        }
+        if (selectedGroups.contains(CapacityGroup.E)) {
+            throw new InvalidInputException("Capacity group E is retired");
+        }
         if (capacity.getServiceType() == ServiceType.FUEL_DELIVERY && !selectedGroups.isEmpty()) {
             throw new InvalidInputException("Fuel delivery uses litre capacity without vehicle groups");
         }
         capacity.setCapacityGroups(selectedGroups);
-        capacity.setVehicleTypes(CapacityGroup.vehicleTypesFor(selectedGroups));
+        capacity.setVehicleTypes(TowingCatalogue.vehicleTypesFor(capacity.getServiceType(), selectedGroups));
     }
 
     private static void validateSpecification(EquipmentCapacity capacity) {

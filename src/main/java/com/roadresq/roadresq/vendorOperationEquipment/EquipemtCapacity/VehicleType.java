@@ -7,6 +7,5 @@ public enum VehicleType {
     PICKUP,
     VAN,
     FULL_SIZE_BUS,
-    HEAVY_TRUCK,
-    MOTORCYCLE
+    HEAVY_TRUCK
 }

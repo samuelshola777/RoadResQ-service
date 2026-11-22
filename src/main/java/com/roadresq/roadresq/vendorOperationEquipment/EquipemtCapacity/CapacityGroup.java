@@ -20,7 +20,6 @@ public enum CapacityGroup {
                 case B -> vehicleTypes.addAll(Set.of(VehicleType.SUV, VehicleType.MINIBUS));
                 case C -> vehicleTypes.addAll(Set.of(VehicleType.PICKUP, VehicleType.VAN));
                 case D -> vehicleTypes.addAll(Set.of(VehicleType.FULL_SIZE_BUS, VehicleType.HEAVY_TRUCK));
-                case E -> vehicleTypes.add(VehicleType.MOTORCYCLE);
                 default -> { }
             }
         }

@@ -20,7 +20,6 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -82,7 +81,7 @@ public class EquipmentCapacitySeeder implements ApplicationRunner {
                     .setOnInsert("voltage", option.voltage())
                     .setOnInsert("displayName", option.displayName())
                     .setOnInsert("capacityGroups", groups)
-                    .setOnInsert("vehicleTypes", CapacityGroup.vehicleTypesFor(groups))
+                    .setOnInsert("vehicleTypes", TowingCatalogue.vehicleTypesFor(option.serviceType(), groups))
                     .setOnInsert("pictures", Set.of())
                     .setOnInsert("active", option.active())
                     .setOnInsert("createdAt", now)
@@ -110,7 +109,7 @@ public class EquipmentCapacitySeeder implements ApplicationRunner {
         BulkOperations bulk = mongoTemplate.bulkOps(BulkOperations.BulkMode.UNORDERED, EquipmentCapacity.class);
         for (EquipmentCapacity capacity : legacyRows) {
             Set<CapacityGroup> groups = capacity.getCapacityGroups();
-            if (groups == null || groups.isEmpty()) {
+            if (capacity.getServiceType() == ServiceType.TOWING || groups == null) {
                 groups = groupsFor(capacity.getServiceType(), capacity.getEquipmentType(),
                         capacity.getCapacityValue(), capacity.getVoltage());
             }
@@ -120,7 +119,7 @@ public class EquipmentCapacitySeeder implements ApplicationRunner {
                     .and("vehicleTypes").is(null));
             bulk.updateOne(query, new Update()
                     .set("capacityGroups", groups)
-                    .set("vehicleTypes", CapacityGroup.vehicleTypesFor(groups)));
+                    .set("vehicleTypes", TowingCatalogue.vehicleTypesFor(capacity.getServiceType(), groups)));
         }
         log.info("Equipment capacity catalogue: {} legacy rows backfilled", bulk.execute().getModifiedCount());
     }
@@ -129,53 +128,17 @@ public class EquipmentCapacitySeeder implements ApplicationRunner {
         if (equipmentType == null || value == null || value.signum() <= 0) {
             return Set.of();
         }
-        long rating = value.longValue();
         return switch (serviceType) {
-            case TOWING -> towingGroups(equipmentType, rating);
-            case BATTERY_JUMP_START -> batteryGroups(voltage, rating);
+            case TOWING -> TowingCatalogue.groupsFor(value);
+            case BATTERY_JUMP_START -> Set.of(); // Manufacturer ratings are reviewed separately.
             case FUEL_DELIVERY -> Set.of();
         };
-    }
-
-    private static Set<CapacityGroup> towingGroups(String equipmentType, long kg) {
-        // Groups shortlist equipment. The vendor still checks vehicle weight and recovery method.
-        Set<CapacityGroup> groups = EnumSet.noneOf(CapacityGroup.class);
-        switch (equipmentType) {
-            case "MOTORCYCLE_TOW_TRAILER" -> groups.add(CapacityGroup.E);
-            case "FLATBED_TOW_TRUCK", "VEHICLE_TRANSPORT_TRAILER",
-                 "WHEEL_LIFT_TOW_TRUCK", "INTEGRATED_TOW_TRUCK" -> {
-                if (kg >= 2_000) groups.add(CapacityGroup.A);
-                if (kg >= 3_500) groups.add(CapacityGroup.B);
-                if (kg >= 5_000) groups.add(CapacityGroup.C);
-                if (kg >= 10_000) groups.add(CapacityGroup.D);
-            }
-            case "HEAVY_DUTY_WRECKER", "HEAVY_DUTY_LOW_LOADER" -> {
-                if (kg >= 10_000) groups.add(CapacityGroup.D);
-            }
-            default -> { }
-        }
-        return groups;
-    }
-
-    private static Set<CapacityGroup> batteryGroups(Integer voltage, long amps) {
-        Set<CapacityGroup> groups = EnumSet.noneOf(CapacityGroup.class);
-        if (Integer.valueOf(12).equals(voltage)) {
-            if (amps >= 1_000) groups.add(CapacityGroup.A);
-            if (amps >= 2_000) groups.add(CapacityGroup.B);
-            if (amps >= 3_000) groups.add(CapacityGroup.C);
-        }
-        if (Integer.valueOf(24).equals(voltage) && amps >= 3_000) {
-            groups.add(CapacityGroup.D);
-        }
-        return groups;
     }
 
     private static List<CapacityOption> buildDefaultOptions() {
         List<CapacityOption> options = new ArrayList<>();
 
         // TOWING: payload and towing rating are different specifications.
-        add(options, ServiceType.TOWING, "MOTORCYCLE_TOW_TRAILER", CapacityType.RATED_PAYLOAD,
-                CapacityUnit.KG, null, 200, 300, 400, 500, 750, 1000, 1500);
         add(options, ServiceType.TOWING, "FLATBED_TOW_TRUCK", CapacityType.RATED_PAYLOAD,
                 CapacityUnit.KG, null, 750, 1000, 1250, 1500, 1750, 2000, 2500, 3000,
                 3500, 4000, 4500, 5000, 6000, 7500, 10000, 12000);
@@ -248,7 +211,8 @@ public class EquipmentCapacitySeeder implements ApplicationRunner {
                     + (voltage == null ? "" : " - " + voltage + "V");
 
             options.add(new CapacityOption(id, serviceType, equipmentType, capacityType,
-                    capacity, capacityUnit, voltage, displayName, true));
+                    capacity, capacityUnit, voltage, displayName,
+                    serviceType != ServiceType.TOWING || !TowingCatalogue.groupsFor(capacity).isEmpty()));
         }
     }
 
